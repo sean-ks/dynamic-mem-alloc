@@ -3,34 +3,31 @@ SRCD := src
 BLDD := build
 BIND := bin
 INCD := include
-LIBD := lib
 
 ALL_SRCF := $(shell find $(SRCD) -type f -name *.c)
-ALL_LIBF := $(shell find $(LIBD) -type f -name *.o)
 ALL_OBJF := $(patsubst $(SRCD)/%,$(BLDD)/%,$(ALL_SRCF:.c=.o))
-FUNC_FILES := $(filter-out build/main.o, $(ALL_OBJF))
-
 
 INC := -I $(INCD)
 
-CFLAGS := -fcommon -Wall -Werror -Wno-unused-function -MMD
+# Add -D_DEFAULT_SOURCE to define GNU extensions (e.g. sbrk)
+CFLAGS := -D_DEFAULT_SOURCE -fcommon -Wall -Werror -Wno-unused-function -MMD \
+          -g -O0 -fsanitize=address
 COLORF := -DCOLOR
 DFLAGS := -g -DDEBUG -DCOLOR
-PRINT_STAMENTS := -DERROR -DSUCCESS -DWARN -DINFO
+PRINT_STATEMENTS := -DERROR -DSUCCESS -DWARN -DINFO
 
 STD := -std=c99
 LIBS := -lm
 
 CFLAGS += $(STD)
 
-EXEC := sfmm
-TEST := $(EXEC)_tests
+EXEC := malloc
 
 .PHONY: clean all setup debug
 
-all: setup $(BIND)/$(EXEC) $(BIND)/$(TEST)
+all: setup $(BIND)/$(EXEC)
 
-debug: CFLAGS += $(DFLAGS) $(PRINT_STAMENTS) $(COLORF)
+debug: CFLAGS += $(DFLAGS) $(PRINT_STATEMENTS) $(COLORF)
 debug: all
 
 setup: $(BIND) $(BLDD)
@@ -39,11 +36,8 @@ $(BIND):
 $(BLDD):
 	mkdir -p $(BLDD)
 
-$(BIND)/$(EXEC): $(ALL_OBJF) $(ALL_LIBF)
+$(BIND)/$(EXEC): $(ALL_OBJF)
 	$(CC) $(CFLAGS) $^ -o $@ $(LIBS)
-
-$(BIND)/$(TEST): $(FUNC_FILES) $(TEST_SRC) $(ALL_LIBF)
-	$(CC) $(CFLAGS) $(INC) $(FUNC_FILES) $(TEST_SRC) $(ALL_LIBF) $(TEST_LIB) $(LIBS) -o $@
 
 $(BLDD)/%.o: $(SRCD)/%.c
 	$(CC) $(CFLAGS) $(INC) -c -o $@ $<
