@@ -178,27 +178,9 @@ void *reallocate(void *pp, size_t rsize) {
 
 void *extend_heap(size_t size)
 {
-    // void *block_ptr;
-
-    // void *old_epilogue_header = (char *)mem_brk - DSIZE;
-    // if((block_ptr = sbrk(PAGE_SIZE)) == (void *)-1)
-    //     return NULL;
-    // //make epilogue first
-    // mem_brk = sbrk(0);
-
-    // PUT2W((char *)mem_brk - DSIZE, PACK(0,1));
-
-    // size_t free_block_size = (char *)mem_brk - (char *)block_ptr - DSIZE;
-    // PUT2W(block_ptr, PACK(free_block_size, 0)); // header
-    // PUT2W(FTRP_HEADER(block_ptr), PACK(free_block_size, 0)); //footer
-
-    // void *coalesced = coalesce(old_epilogue_header);
-    // add_to_seglist(coalesced);
-    // return coalesced;
     void *block_ptr;
     size_t new_size;
 
-    // Allocate an integer number of pages to hold the requested size.
     new_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
     if ((block_ptr = sbrk(new_size)) == (void *)-1) {
@@ -206,20 +188,19 @@ void *extend_heap(size_t size)
         return NULL;
     }
 
-    // Update the new end of the heap.
     mem_brk = sbrk(0);
 
-    // Initialize the new memory as a free block.
+
     PUT2W((char *)block_ptr, PACK(new_size, 0)); // header
     PUT2W(FTRP_HEADER((char *)block_ptr), PACK(new_size, 0)); //footer
 
-    // Create the new epilogue at the very end of the new heap.
+
     PUT2W((char *)mem_brk - DSIZE, PACK(0, 1));
 
-    // Coalesce the new block with the previous block if it was free.
+
     void *coalesced_block = coalesce(block_ptr);
 
-    // Add the final, possibly larger, free block to the segregated list.
+
     add_to_seglist(coalesced_block);
     
     return coalesced_block;
