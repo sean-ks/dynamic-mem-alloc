@@ -1,6 +1,7 @@
 #ifndef SEGLIST_H
 #define SEGLIST_H
 
+#include <stddef.h> 
 
 /**
  * Determines the min seglist index for a given block size

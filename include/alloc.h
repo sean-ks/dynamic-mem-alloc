@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <stdio.h>
 
 #define THIS_BLOCK_ALLOCATED  0x1
 #define IN_QUICK_LIST         0x2
@@ -68,15 +70,56 @@ void *reallocate(void *ptr, size_t size);
 
 
 /**
- * Wrapper for sf_mem_grow
  * updates the epilogue
  * coalesces with adjacent free blocks if possible.
  * 
  * @return Pointer to the coalesced free block, NULL if no more mem
  */
-void *grow_heap();
+void *extend_heap();
 
 
 int validate_free_ptr(void *pp);
+
+
+/**
+ * Allocates a block from a free block, potentially splitting if large enough
+ * 
+ * Removes the block from its free list, marks it as allocated, updates header/footer
+ * with the requested size, creates a new free block from any remaining space
+ * if the remainder is large enough.
+ * 
+ * @param block_ptr Pointer to the header of the free block
+ * @param block_size Size to allocate from the block
+ * @param payload_size Size of user-requested payload
+ */
+void allocate_block(void *block_ptr, size_t block_size, size_t payload_size);
+
+
+/**
+ * Coalesces a free block with any adjacent free blocks
+ * 
+ * Handles four cases:
+ * 1. Both previous and next blocks are allocated
+ * 2. Previous block is allocated, next block is free
+ * 3. Previous block is free, next block is allocated
+ * 4. Both previous and next blocks are free
+ * 
+ * Definition mostly taken from CS:APP txtbook
+ * 
+ * @param block_ptr Pointer to the header of the block to coalesce
+ * @return Pointer to the header of the resulting coalesced block
+ */
+void *coalesce(void *block_ptr);
+
+
+/*
+ * Marks a dynamically allocated region as no longer in use.
+ * Adds the newly freed block to the free list.
+ *
+ * @param ptr Address of memory returned by the function alloc.
+ *
+  * If ptr is invalid, the function calls abort() to exit the program.
+ */
+void freemem(void *ptr);
 
 #endif
