@@ -1,7 +1,6 @@
 #include "alloc.h"
 #include "find.h"
 #include "macros.h"
-#include "free.h"
 #include "seglist.h"
 #include <errno.h>
 
@@ -86,7 +85,7 @@ void *alloc(size_t size)
         - 8 byte header sizes, + payload size (size) + padding for alignment + 8 byte footer size
     */
     block_size = ALIGN(size);
-    if(block_size < MIN_SIZE) return NULL;
+    if(block_size < MIN_SIZE) block_size = MIN_SIZE;
 
     void *block_ptr;
 
@@ -100,30 +99,13 @@ void *alloc(size_t size)
     }
     
     block_ptr = find_list(block_size);
-    if(block_ptr != NULL)
+    if(block_ptr == NULL)
     {
-        allocate_block(block_ptr, block_size, size);
-        current_payload += size;
-        if(current_payload > max_payload) max_payload = current_payload;
-        return (char *)block_ptr + DSIZE; //block_ptr points to header, return pointer to payload
-    }
-
-    //Heap ran out :()
-    //Get more memory
-    while(1)
-    {
-        if((block_ptr = grow_heap()) == NULL)
-        {
-            errno = ENOMEM; // I know this is already set, but just in case
+        // No fit found. Get more memory and place the block.
+        if ((block_ptr = extend_heap(block_size)) == NULL) {
             return NULL;
         }
-
-        size_t new_block_size = GET_BLOCKSIZE(block_ptr);
-
-        if(new_block_size >= block_size) break;
-        //Hopefully this isn't an infinite loop, the check for NULL should be fine...
     }
-
 
     allocate_block(block_ptr, block_size, size);
     current_payload += size;
@@ -194,79 +176,269 @@ void *reallocate(void *pp, size_t rsize) {
 }
 
 
-void *grow_heap()
+void *extend_heap(size_t size)
 {
+    // void *block_ptr;
+
+    // void *old_epilogue_header = (char *)mem_brk - DSIZE;
+    // if((block_ptr = sbrk(PAGE_SIZE)) == (void *)-1)
+    //     return NULL;
+    // //make epilogue first
+    // mem_brk = sbrk(0);
+
+    // PUT2W((char *)mem_brk - DSIZE, PACK(0,1));
+
+    // size_t free_block_size = (char *)mem_brk - (char *)block_ptr - DSIZE;
+    // PUT2W(block_ptr, PACK(free_block_size, 0)); // header
+    // PUT2W(FTRP_HEADER(block_ptr), PACK(free_block_size, 0)); //footer
+
+    // void *coalesced = coalesce(old_epilogue_header);
+    // add_to_seglist(coalesced);
+    // return coalesced;
     void *block_ptr;
-    if((block_ptr = sbrk(PAGE_SIZE)) == (void *)-1)
+    size_t new_size;
+
+    // Allocate an integer number of pages to hold the requested size.
+    new_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    if ((block_ptr = sbrk(new_size)) == (void *)-1) {
+        errno = ENOMEM;
         return NULL;
-    void *header_ptr = (char *)block_ptr - DSIZE;
-    //make epilogue first
+    }
+
+    // Update the new end of the heap.
     mem_brk = sbrk(0);
 
-    PUT2W(mem_brk - DSIZE, PACK(0,1));
+    // Initialize the new memory as a free block.
+    PUT2W((char *)block_ptr, PACK(new_size, 0)); // header
+    PUT2W(FTRP_HEADER((char *)block_ptr), PACK(new_size, 0)); //footer
 
-    size_t free_block_size = (char *)mem_brk - (char *)block_ptr;
-    PUT2W(HDRP(block_ptr), PACK(free_block_size, 0)); // header
-    PUT2W(FTRP(block_ptr), PACK(free_block_size, 0)); //footer
+    // Create the new epilogue at the very end of the new heap.
+    PUT2W((char *)mem_brk - DSIZE, PACK(0, 1));
 
-    void *coalesced = coalesce(header_ptr);
-    add_to_seglist(coalesced);
-    return coalesced;
+    // Coalesce the new block with the previous block if it was free.
+    void *coalesced_block = coalesce(block_ptr);
+
+    // Add the final, possibly larger, free block to the segregated list.
+    add_to_seglist(coalesced_block);
+    
+    return coalesced_block;
 }
 
 
 int validate_free_ptr(void *pp)
 {
+    printf("test: %p\n", pp);
     if(pp == NULL || pp == 0 || pp == (void *)-1) // null ptr
     {
-        debug("NULL");
+        printf("null");
+        fflush(NULL);
         return -1;
     }
     if(pp < list_p || pp > mem_brk) //not in heap
     {
-        debug("NOT IN HEAP");
+        printf("not in heap");
         return -1;
     }
-    if(((uintptr_t)pp & 0xF) != 0) //ptr not aligned
+    if(((uintptr_t)pp & (DSIZE - 1)) != 0) //ptr not aligned
     {
-        debug("not aligned");
+        printf("not aligned");
+        fflush(NULL);
         return -1;
     }
 
     block *block_ptr = (block *)((char *)pp - DSIZE); // already free
     if(!((block_ptr->header) & THIS_BLOCK_ALLOCATED))
     {
-        debug("already free");
+        printf("already free");
+        fflush(NULL);
         return -1;
     }
     if(((block_ptr->header) & IN_QUICK_LIST)) // in quick list
     {
-        debug("in quick list");
+        printf("in ql");
+        fflush(NULL);
         return -1;
     }
 
     header *footer = (header *)(FTRP_HEADER(block_ptr));
     if((*footer) != (block_ptr->header)) //Footer and header don't match
     {
+        printf("ftr and hdr dont match");
+        fflush(NULL);
         return -1;
     }
 
     size_t size = GET_BLOCKSIZE(block_ptr);
     if(size < MIN_SIZE) // Size is less than minimum
     {
+        printf("size is less than min");
+        fflush(NULL);
         return -1;
     }
     if((size & 0xF) != 0) //Size is not a multiple of 16
     {
+        printf("size is not mult of 16");
+        fflush(NULL);
         return -1;
     }
     if((char *)footer >= (char *)mem_brk - DSIZE) //Footer is after or on epilogue
     {
+        printf("footer after epilogue");
+        fflush(NULL);
         return -1;
     }
     if((char *)block_ptr < (char *)list_p) //block_ptr is on prologue or before it
     {
+        printf("block_ptr is on or b4 prologue");
+        fflush(NULL);
         return -1;
     }
+    printf("works?");
+    fflush(NULL);
     return 0;
+}
+
+
+void allocate_block(void *block_ptr, size_t block_size, size_t payload_size)
+{
+    size_t fb_size = GET_BLOCKSIZE(block_ptr);
+    size_t remainder = fb_size - block_size;
+    remove_from_seglist(block_ptr);
+    if (remainder >= MIN_SIZE)
+    {
+        PUT2W(block_ptr, ALLOC_PACK(payload_size, block_size)); //Header for block
+        PUT2W((char *)block_ptr + block_size - DSIZE, ALLOC_PACK(payload_size, block_size)); //Footer for block
+
+        /* We don't have to worry about figuring out if there's another allocated block after this
+        We have enough remaining to just create a new free block
+        */
+        void *new_block = (char *)block_ptr + block_size;
+        PUT2W(new_block, PACK(remainder, 0)); //Header for free
+        PUT2W(FTRP_HEADER(new_block), PACK(remainder, 0)); //Footer for free
+
+        add_to_seglist(new_block);
+    }
+    else
+    {
+        PUT2W((char *)block_ptr, ALLOC_PACK(payload_size, fb_size));
+        PUT2W(FTRP_HEADER((char *)block_ptr), ALLOC_PACK(payload_size, fb_size));
+    }
+}
+
+void *coalesce(void *block_ptr)
+{
+    size_t prev_alloc = (*((header *)((char *)block_ptr - DSIZE))) & THIS_BLOCK_ALLOCATED;
+    size_t size = GET_BLOCKSIZE(block_ptr);
+    size_t next_alloc = (*((header *)((char *)block_ptr + size - DSIZE))) & THIS_BLOCK_ALLOCATED;
+    //Case 1, in between two allocs
+    if(prev_alloc && next_alloc) 
+        return block_ptr;
+
+    //Case 2, next is free
+    else if (prev_alloc && !next_alloc) 
+    {
+        size_t next_size = (*((header *)((char *)block_ptr + size))) & 0x0FFFFFFF0;
+        remove_from_seglist((char *)block_ptr + size);
+        
+        size += next_size;
+        PUT2W(block_ptr, PACK(size, 0)); //header
+        PUT2W((char *)block_ptr + size - DSIZE, PACK(size, 0)); //footer
+    }
+
+    //Case 3, prev is free
+    else if (!prev_alloc && next_alloc) 
+    {
+        size_t prev_size = (*((header *)((char *)block_ptr - DSIZE))) & 0x0FFFFFFF0;
+
+        remove_from_seglist((char *)block_ptr - prev_size);
+        size += prev_size;
+        block_ptr = (char *)block_ptr - prev_size;
+        PUT2W(block_ptr, PACK(size, 0));
+        PUT2W((char *)block_ptr + size - DSIZE, PACK(size, 0));
+    }
+
+    //Case 4, both are free
+    else 
+    {
+        size_t next_size = (*((header *)(block_ptr + size))) & 0x0FFFFFFF0;
+        size_t prev_size = (*((header *)(block_ptr - DSIZE))) & 0x0FFFFFFF0;
+        
+        remove_from_seglist((char *)block_ptr + size);
+        remove_from_seglist((char *)block_ptr - prev_size);
+
+        size += next_size + prev_size;
+        block_ptr = (char *)block_ptr - prev_size;
+        PUT2W(block_ptr, PACK(size, 0));
+        PUT2W((char *)block_ptr + size - DSIZE, PACK(size, 0));
+    }
+
+    return block_ptr;
+
+}
+
+void freemem(void *pp) {
+    int valid = validate_free_ptr(pp);
+    if(valid) abort();
+
+    block *b = (block *)((char *)pp - DSIZE);
+    size_t block_size = GET_BLOCKSIZE(b);
+    current_payload -= block_size;
+
+    // Check if block should be added to a quick list
+    if (block_size <= (MIN_SIZE + (NUM_QUICK_LISTS - 1) * 16))
+    {
+        int ql_index = (block_size - MIN_SIZE) / 16;
+
+        // Check if quick list isn't full
+        if (quick_lists[ql_index].length < QUICK_LIST_MAX)
+        {
+            SET_QUICK(b);
+            PUT2W(FTRP(pp), b->header); //footer
+            GET_NEXT(b) = quick_lists[ql_index].first;
+
+            quick_lists[ql_index].first = b;
+            quick_lists[ql_index].length++;
+            return;
+        }
+        else
+        {
+            //Flush quicklist
+            block *current = quick_lists[ql_index].first;
+            block *next;
+
+            while(current != NULL)
+            {
+                next = GET_NEXT(current);
+                current->header = ((current->header) & ~(THIS_BLOCK_ALLOCATED | IN_QUICK_LIST ));
+
+
+                PUT2W(FTRP_HEADER(current), current->header); //footer
+
+                add_to_seglist(coalesce(current));
+                current = next;
+            }
+            // reset
+            quick_lists[ql_index].first = NULL;
+            quick_lists[ql_index].length = 0;
+
+            /*
+                After flushing the quick list,
+                the block currently being freed is inserted into the
+                now-empty list, leaving just one block in that list.
+            */
+            SET_QUICK(b);
+            PUT2W(FTRP_HEADER(b), b->header); //set quick for footer
+            b->body.links.next = NULL;
+            quick_lists[ql_index].first = b;
+            quick_lists[ql_index].length = 1;
+            return;
+        }
+    }
+
+    //Too big to be in quicklist, add to seglist instead
+    b->header = ((b->header) & ~THIS_BLOCK_ALLOCATED);
+
+    PUT2W(FTRP_HEADER(b), b->header); //footer
+    add_to_seglist(coalesce(b));
 }
